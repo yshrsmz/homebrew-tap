@@ -1,0 +1,167 @@
+name: Update the Mewbell cask
+
+# yshrsmz/mewbell のリリースのワークフローが、Release を公開した後にバージョンだけを送ってくる。
+# payload はバージョンの形式を確かめてから使い、URL はここで組み立てる。
+# Release には zip・SHA-256・Cask（mewbell.rb）が添付されている。zip と Cask は、mewbell の main の
+# リリースのワークフローが作ったことを build provenance attestation で確かめる（添付ファイルは書き込み権限が
+# あれば差し替えられるため）。さらに Cask の version と sha256 が、知らせのバージョンと自分で計算した zip の
+# SHA-256 に一致することを確かめてから、その Cask を使う。
+# いまの Cask より新しい版のときだけ、Cask を PR で更新し、ci が通ったら自動でマージする。
+
+on:
+  repository_dispatch:
+    types: [mewbell-released]
+
+permissions:
+  contents: read
+  # 開いている Cask の PR の版を読む
+  pull-requests: read
+
+concurrency:
+  group: update-mewbell
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    env:
+      VERSION: ${{ github.event.client_payload.version }}
+    steps:
+      - name: Validate the version
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "バージョンの形式が X.Y.Z ではありません" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 同じ版の知らせのやり直しや、古い版の知らせで Cask を戻さない。main の Cask に加えて、
+      # 開いている Cask の PR（mewbell-X.Y.Z）の版とも比べる（遅れて届いた古い版で新しい版の PR を閉じない）
+      - id: compare
+        name: Compare with the current cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=""
+          if [[ -f Casks/mewbell.rb ]]; then
+            current="$(sed -n 's/^  version "\([0-9.]*\)"$/\1/p' Casks/mewbell.rb)"
+          fi
+          if [[ -n "$current" && "$(printf '%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]] ||
+            [[ "$current" == "$VERSION" ]]; then
+            echo "いまの Cask は ${current} なので、${VERSION} への更新はしません"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pending="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName \
+            --jq '.[].headRefName | select(test("^mewbell-[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("mewbell-")')"
+          for version in $pending; do
+            if [[ "$version" != "$VERSION" && "$(printf '%s\n' "$version" "$VERSION" | sort -V | tail -n 1)" == "$version" ]]; then
+              echo "${version} の PR が開いているので、${VERSION} への更新はしません"
+              echo "skip=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+      - name: Download and verify the release
+        if: steps.compare.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base="https://github.com/yshrsmz/mewbell/releases/download/v$VERSION"
+          dir="$RUNNER_TEMP/release"
+          mkdir -p "$dir"
+          for file in "Mewbell-$VERSION.zip" "Mewbell-$VERSION.zip.sha256" mewbell.rb; do
+            curl -fsSL --proto '=https' --tlsv1.2 -o "$dir/$file" "$base/$file"
+          done
+
+          for file in "Mewbell-$VERSION.zip" mewbell.rb; do
+            gh attestation verify "$dir/$file" \
+              --repo yshrsmz/mewbell \
+              --signer-workflow yshrsmz/mewbell/.github/workflows/release.yml \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners
+          done
+
+          # ダウンロードの破損を見つける
+          expected="$(cut -d ' ' -f 1 "$dir/Mewbell-$VERSION.zip.sha256")"
+          actual="$(sha256sum "$dir/Mewbell-$VERSION.zip" | cut -d ' ' -f 1)"
+          if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$actual" != "$expected" ]]; then
+            echo "SHA-256 が一致しません（計算: ${actual}、添付: ${expected}）" >&2
+            exit 1
+          fi
+          # 別の版の Cask を差し込まれていないか（attestation は Cask とバージョンを結び付けない）
+          if ! grep -qx "  version \"$VERSION\"" "$dir/mewbell.rb" ||
+            ! grep -qx "  sha256 \"$actual\"" "$dir/mewbell.rb"; then
+            echo "Cask の version か sha256 が ${VERSION} の zip と一致しません" >&2
+            exit 1
+          fi
+          cat "$dir/mewbell.rb"
+
+      - id: app-token
+        if: steps.compare.outputs.skip != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+
+      # git の資格情報を使わずに API でコミットする（コミットは App の名前で署名される）。
+      # 古い版の PR が開いていれば閉じる（同じ Casks/mewbell.rb を変えるので、残すと衝突して auto-merge が止まる）。
+      # この版の PR が開いていれば、そのブランチに書く（開いている PR を一時的に空にしない）。
+      # PR の無いブランチが残っていれば、main から作り直す
+      - name: Open a pull request
+        if: steps.compare.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          branch="mewbell-$VERSION"
+          path="Casks/mewbell.rb"
+          repo="$GITHUB_REPOSITORY"
+
+          gh pr list --repo "$repo" --state open --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("mewbell-")) | "\(.number) \(.headRefName)"' |
+            while read -r number head; do
+              if [[ "$head" != "$branch" ]]; then
+                gh pr close "$number" --repo "$repo" --delete-branch \
+                  --comment "mewbell $VERSION の PR に置き換えます"
+              fi
+            done
+
+          open_pr="$(gh pr list --repo "$repo" --state open --head "$branch" --json number --jq '.[].number')"
+          if [[ -z "$open_pr" ]]; then
+            if gh api "repos/$repo/git/ref/heads/$branch" >/dev/null 2>"$RUNNER_TEMP/ref.err"; then
+              gh api -X DELETE "repos/$repo/git/refs/heads/$branch"
+            elif ! grep -q "HTTP 404" "$RUNNER_TEMP/ref.err"; then
+              cat "$RUNNER_TEMP/ref.err" >&2
+              exit 1
+            fi
+            base="$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)"
+            gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$base" >/dev/null
+          fi
+
+          args=()
+          if current="$(gh api "repos/$repo/contents/$path?ref=$branch" --jq .sha 2>"$RUNNER_TEMP/contents.err")"; then
+            args=(-f sha="$current")
+          elif ! grep -q "HTTP 404" "$RUNNER_TEMP/contents.err"; then
+            cat "$RUNNER_TEMP/contents.err" >&2
+            exit 1
+          fi
+          gh api -X PUT "repos/$repo/contents/$path" \
+            -f message="mewbell $VERSION" \
+            -f branch="$branch" \
+            -f content="$(base64 -w 0 "$RUNNER_TEMP/release/mewbell.rb")" \
+            "${args[@]}" >/dev/null
+
+          if [[ -z "$open_pr" ]]; then
+            gh pr create --repo "$repo" --base main --head "$branch" \
+              --title "mewbell $VERSION" \
+              --body "https://github.com/yshrsmz/mewbell/releases/tag/v$VERSION"
+          fi
+          gh pr merge --repo "$repo" "$branch" --auto --squash
