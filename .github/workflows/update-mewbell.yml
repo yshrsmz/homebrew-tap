@@ -1,8 +1,11 @@
 name: Update the Mewbell cask
 
 # yshrsmz/mewbell のリリースのワークフローが、Release を公開した後にバージョンだけを送ってくる。
-# payload は信用しない: バージョンの形式を確かめ、URL はここで組み立て、SHA-256 は自分で計算して
-# Release に添付された値と照らし合わせる。Cask は PR で更新し、ci が通ったら自動でマージする。
+# payload はバージョンの形式を確かめてから使い、URL はここで組み立てる。Cask の雛形はそのタグの
+# packaging/homebrew/mewbell.rb.template を使う（mewbell 側で公開の前に brew style と brew audit を通している）。
+# SHA-256 は自分で計算し、Release に添付された値と照らし合わせる。これはダウンロードの破損を見つけるためで、
+# 添付ファイルの正しさは mewbell のリリースのワークフローだけが Release に書けることに頼っている。
+# いまの Cask より新しい版のときだけ、Cask を PR で更新し、ci が通ったら自動でマージする。
 
 on:
   repository_dispatch:
@@ -34,7 +37,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # 同じ版の知らせのやり直しや、古い版の知らせで Cask を戻さない
+      - id: compare
+        name: Compare with the current cask
+        run: |
+          current=""
+          if [[ -f Casks/mewbell.rb ]]; then
+            current="$(sed -n 's/^  version "\([0-9.]*\)"$/\1/p' Casks/mewbell.rb)"
+          fi
+          newest="$(printf '%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
+          if [[ -n "$current" && ( "$current" == "$VERSION" || "$newest" != "$VERSION" ) ]]; then
+            echo "いまの Cask は ${current} なので、${VERSION} への更新はしません"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Download and verify the release
+        if: steps.compare.outputs.skip != 'true'
         run: |
           base="https://github.com/yshrsmz/mewbell/releases/download/v$VERSION"
           zip="$RUNNER_TEMP/Mewbell-$VERSION.zip"
@@ -48,12 +66,16 @@ jobs:
           echo "SHA256=$actual" >>"$GITHUB_ENV"
 
       - name: Render the cask
+        if: steps.compare.outputs.skip != 'true'
         run: |
+          curl -fsSL --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/mewbell.rb.template" \
+            "https://raw.githubusercontent.com/yshrsmz/mewbell/v$VERSION/packaging/homebrew/mewbell.rb.template"
           sed -e "s/@VERSION@/$VERSION/" -e "s/@SHA256@/$SHA256/" \
-            .github/templates/mewbell.rb.template >"$RUNNER_TEMP/mewbell.rb"
+            "$RUNNER_TEMP/mewbell.rb.template" >"$RUNNER_TEMP/mewbell.rb"
           cat "$RUNNER_TEMP/mewbell.rb"
 
       - id: app-token
+        if: steps.compare.outputs.skip != 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.TAP_APP_CLIENT_ID }}
@@ -62,22 +84,26 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # git の資格情報を使わずに API でコミットする（コミットは App の名前で署名される）
+      # git の資格情報を使わずに API でコミットする（コミットは App の名前で署名される）。
+      # 前の試みのブランチが残っていても main に戻さず、その上に書く（開いている PR を空にしない）
       - name: Open a pull request
+        if: steps.compare.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           branch="mewbell-$VERSION"
           path="Casks/mewbell.rb"
-          base="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" -f sha="$base" -F force=true >/dev/null
-          else
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" >/dev/null 2>"$RUNNER_TEMP/ref.err"; then
+            grep -q "HTTP 404" "$RUNNER_TEMP/ref.err" || { cat "$RUNNER_TEMP/ref.err" >&2; exit 1; }
+            base="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
             gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$branch" -f sha="$base" >/dev/null
           fi
           args=()
-          if current="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$branch" --jq .sha 2>/dev/null)"; then
+          if current="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$branch" --jq .sha 2>"$RUNNER_TEMP/contents.err")"; then
             args=(-f sha="$current")
+          elif ! grep -q "HTTP 404" "$RUNNER_TEMP/contents.err"; then
+            cat "$RUNNER_TEMP/contents.err" >&2
+            exit 1
           fi
           gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$path" \
             -f message="mewbell $VERSION" \
