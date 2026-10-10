@@ -27,12 +27,12 @@ jobs:
           brew tap yshrsmz/tap "$GITHUB_WORKSPACE"
           brew trust --tap yshrsmz/tap
 
-      - name: brew style
-        run: brew style yshrsmz/tap
-
-      - name: brew audit
+      # tap 全体に brew style をかけるとワークフローにも actionlint がかかるので、Cask だけを対象にする
+      - name: brew style and brew audit
         run: |
           shopt -s nullglob
           for cask in Casks/*.rb; do
-            brew audit --cask --strict "yshrsmz/tap/$(basename "$cask" .rb)"
+            name="yshrsmz/tap/$(basename "$cask" .rb)"
+            brew style --cask "$name"
+            brew audit --cask --strict "$name"
           done
