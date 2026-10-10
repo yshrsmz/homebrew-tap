@@ -3,8 +3,9 @@ name: Update the Mewbell cask
 # yshrsmz/mewbell のリリースのワークフローが、Release を公開した後にバージョンだけを送ってくる。
 # payload はバージョンの形式を確かめてから使い、URL はここで組み立てる。Cask の雛形はそのタグの
 # packaging/homebrew/mewbell.rb.template を使う（mewbell 側で公開の前に brew style と brew audit を通している）。
-# SHA-256 は自分で計算し、Release に添付された値と照らし合わせる。これはダウンロードの破損を見つけるためで、
-# 添付ファイルの正しさは mewbell のリリースのワークフローだけが Release に書けることに頼っている。
+# SHA-256 は自分で計算し、Release に添付された値と照らし合わせる（ダウンロードの破損を見つける）。
+# 添付ファイルは書き込み権限があれば差し替えられるので、zip が mewbell の main のリリースのワークフローで
+# 作られたことを build provenance attestation で確かめる。
 # いまの Cask より新しい版のときだけ、Cask を PR で更新し、ci が通ったら自動でマージする。
 
 on:
@@ -53,6 +54,8 @@ jobs:
 
       - name: Download and verify the release
         if: steps.compare.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           base="https://github.com/yshrsmz/mewbell/releases/download/v$VERSION"
           zip="$RUNNER_TEMP/Mewbell-$VERSION.zip"
@@ -63,6 +66,11 @@ jobs:
             echo "SHA-256 が一致しません（計算: ${actual}、添付: ${expected}）" >&2
             exit 1
           fi
+          gh attestation verify "$zip" \
+            --repo yshrsmz/mewbell \
+            --signer-workflow yshrsmz/mewbell/.github/workflows/release.yml \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
           echo "SHA256=$actual" >>"$GITHUB_ENV"
 
       - name: Render the cask
@@ -70,7 +78,7 @@ jobs:
         run: |
           curl -fsSL --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/mewbell.rb.template" \
             "https://raw.githubusercontent.com/yshrsmz/mewbell/v$VERSION/packaging/homebrew/mewbell.rb.template"
-          sed -e "s/@VERSION@/$VERSION/" -e "s/@SHA256@/$SHA256/" \
+          sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHA256@/$SHA256/g" \
             "$RUNNER_TEMP/mewbell.rb.template" >"$RUNNER_TEMP/mewbell.rb"
           cat "$RUNNER_TEMP/mewbell.rb"
 
