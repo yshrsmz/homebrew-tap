@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: read
+  # 開いている Cask の PR の版を読む
+  pull-requests: read
 
 concurrency:
   group: update-mewbell
@@ -38,19 +40,32 @@ jobs:
         with:
           persist-credentials: false
 
-      # 同じ版の知らせのやり直しや、古い版の知らせで Cask を戻さない
+      # 同じ版の知らせのやり直しや、古い版の知らせで Cask を戻さない。main の Cask に加えて、
+      # 開いている Cask の PR（mewbell-X.Y.Z）の版とも比べる（遅れて届いた古い版で新しい版の PR を閉じない）
       - id: compare
         name: Compare with the current cask
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           current=""
           if [[ -f Casks/mewbell.rb ]]; then
             current="$(sed -n 's/^  version "\([0-9.]*\)"$/\1/p' Casks/mewbell.rb)"
           fi
-          newest="$(printf '%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
-          if [[ -n "$current" && ( "$current" == "$VERSION" || "$newest" != "$VERSION" ) ]]; then
+          if [[ -n "$current" && "$(printf '%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]] ||
+            [[ "$current" == "$VERSION" ]]; then
             echo "いまの Cask は ${current} なので、${VERSION} への更新はしません"
             echo "skip=true" >>"$GITHUB_OUTPUT"
+            exit 0
           fi
+          pending="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName \
+            --jq '.[].headRefName | select(test("^mewbell-[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("mewbell-")')"
+          for version in $pending; do
+            if [[ "$version" != "$VERSION" && "$(printf '%s\n' "$version" "$VERSION" | sort -V | tail -n 1)" == "$version" ]]; then
+              echo "${version} の PR が開いているので、${VERSION} への更新はしません"
+              echo "skip=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
 
       - name: Download and verify the release
         if: steps.compare.outputs.skip != 'true'
