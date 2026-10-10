@@ -42,7 +42,7 @@ jobs:
           expected="$(curl -fsSL --proto '=https' --tlsv1.2 "$base/Mewbell-$VERSION.zip.sha256" | cut -d ' ' -f 1)"
           actual="$(sha256sum "$zip" | cut -d ' ' -f 1)"
           if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$actual" != "$expected" ]]; then
-            echo "SHA-256 が一致しません（計算: $actual、添付: $expected）" >&2
+            echo "SHA-256 が一致しません（計算: ${actual}、添付: ${expected}）" >&2
             exit 1
           fi
           echo "SHA256=$actual" >>"$GITHUB_ENV"
