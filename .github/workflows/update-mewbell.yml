@@ -1,0 +1,92 @@
+name: Update the Mewbell cask
+
+# yshrsmz/mewbell のリリースのワークフローが、Release を公開した後にバージョンだけを送ってくる。
+# payload は信用しない: バージョンの形式を確かめ、URL はここで組み立て、SHA-256 は自分で計算して
+# Release に添付された値と照らし合わせる。Cask は PR で更新し、ci が通ったら自動でマージする。
+
+on:
+  repository_dispatch:
+    types: [mewbell-released]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-mewbell
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    env:
+      VERSION: ${{ github.event.client_payload.version }}
+    steps:
+      - name: Validate the version
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "バージョンの形式が X.Y.Z ではありません" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download and verify the release
+        run: |
+          base="https://github.com/yshrsmz/mewbell/releases/download/v$VERSION"
+          zip="$RUNNER_TEMP/Mewbell-$VERSION.zip"
+          curl -fsSL --proto '=https' --tlsv1.2 -o "$zip" "$base/Mewbell-$VERSION.zip"
+          expected="$(curl -fsSL --proto '=https' --tlsv1.2 "$base/Mewbell-$VERSION.zip.sha256" | cut -d ' ' -f 1)"
+          actual="$(sha256sum "$zip" | cut -d ' ' -f 1)"
+          if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$actual" != "$expected" ]]; then
+            echo "SHA-256 が一致しません（計算: $actual、添付: $expected）" >&2
+            exit 1
+          fi
+          echo "SHA256=$actual" >>"$GITHUB_ENV"
+
+      - name: Render the cask
+        run: |
+          sed -e "s/@VERSION@/$VERSION/" -e "s/@SHA256@/$SHA256/" \
+            .github/templates/mewbell.rb.template >"$RUNNER_TEMP/mewbell.rb"
+          cat "$RUNNER_TEMP/mewbell.rb"
+
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+
+      # git の資格情報を使わずに API でコミットする（コミットは App の名前で署名される）
+      - name: Open a pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          branch="mewbell-$VERSION"
+          path="Casks/mewbell.rb"
+          base="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" -f sha="$base" -F force=true >/dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$branch" -f sha="$base" >/dev/null
+          fi
+          args=()
+          if current="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$branch" --jq .sha 2>/dev/null)"; then
+            args=(-f sha="$current")
+          fi
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$path" \
+            -f message="mewbell $VERSION" \
+            -f branch="$branch" \
+            -f content="$(base64 -w 0 "$RUNNER_TEMP/mewbell.rb")" \
+            "${args[@]}" >/dev/null
+          if [[ -z "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --json number --jq '.[].number')" ]]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "mewbell $VERSION" \
+              --body "https://github.com/yshrsmz/mewbell/releases/tag/v$VERSION"
+          fi
+          gh pr merge --repo "$GITHUB_REPOSITORY" "$branch" --auto --squash

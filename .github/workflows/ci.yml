@@ -1,0 +1,38 @@
+name: ci
+
+# Cask の変更を brew style と brew audit で確かめる。main の ruleset でこのチェックを必須にしている。
+# brew audit --cask を確実に動かすため macOS で動かす。
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tap this checkout
+        run: |
+          brew tap yshrsmz/tap "$GITHUB_WORKSPACE"
+          brew trust --tap yshrsmz/tap
+
+      - name: brew style
+        run: brew style yshrsmz/tap
+
+      - name: brew audit
+        run: |
+          shopt -s nullglob
+          for cask in Casks/*.rb; do
+            brew audit --cask --strict "yshrsmz/tap/$(basename "$cask" .rb)"
+          done
