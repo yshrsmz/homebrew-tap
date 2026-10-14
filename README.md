@@ -2,6 +2,12 @@
 
 Homebrew tap for apps by [@yshrsmz](https://github.com/yshrsmz).
 
+## Casks
+
+| Cask | Description | Install |
+| --- | --- | --- |
+| [mewbell](https://github.com/yshrsmz/mewbell) | Menu bar app for GitHub notifications across gh CLI accounts | `brew install --cask yshrsmz/tap/mewbell` |
+
 ## Usage
 
 Homebrew loads casks from third-party taps only after you trust them.
