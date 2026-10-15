@@ -1,6 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "local>yshrsmz/renovate-config"
-  ]
+    "github>yshrsmz/renovate-config",
+    "github>yshrsmz/renovate-config:github-actions"
+  ],
+  "reviewers": ["yshrsmz"]
 }
