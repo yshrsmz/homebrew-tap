@@ -8,14 +8,21 @@ Homebrew tap for apps by [@yshrsmz](https://github.com/yshrsmz).
 | --- | --- | --- |
 | [mewbell](https://github.com/yshrsmz/mewbell) | Menu bar app for GitHub notifications across gh CLI accounts | `brew install --cask yshrsmz/tap/mewbell` |
 
+## Formulae
+
+| Formula | Description | Install |
+| --- | --- | --- |
+| [mewgit](https://github.com/yshrsmz/mewgit) | TUI git client with a commit graph and GitHub integration (arm64 only) | `brew install yshrsmz/tap/mewgit` |
+
 ## Usage
 
-Homebrew loads casks from third-party taps only after you trust them.
+Homebrew loads casks and formulae from third-party taps only after you trust them.
 
 ```bash
 brew tap yshrsmz/tap
-brew trust --tap yshrsmz/tap        # or trust a single cask: brew trust --cask yshrsmz/tap/<cask>
+brew trust --tap yshrsmz/tap        # or trust a single one: brew trust --cask yshrsmz/tap/<cask> / brew trust --formula yshrsmz/tap/<formula>
 brew install --cask yshrsmz/tap/<cask>
+brew install yshrsmz/tap/<formula>
 ```
 
 ## Gatekeeper
