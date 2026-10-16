@@ -1,6 +1,6 @@
 name: ci
 
-# Cask の変更を brew style と brew audit で確かめる。main の ruleset でこのチェックを必須にしている。
+# Cask と Formula の変更を brew style と brew audit で確かめる。main の ruleset でこのチェックを必須にしている。
 # brew audit --cask を確実に動かすため macOS で動かす。
 
 on:
@@ -25,7 +25,7 @@ jobs:
           brew tap yshrsmz/tap "$GITHUB_WORKSPACE"
           brew trust --tap yshrsmz/tap
 
-      # tap 全体に brew style をかけるとワークフローにも actionlint がかかるので、Cask だけを対象にする
+      # tap 全体に brew style をかけるとワークフローにも actionlint がかかるので、Cask と Formula だけを対象にする
       - name: brew style and brew audit
         run: |
           shopt -s nullglob
@@ -33,4 +33,9 @@ jobs:
             name="yshrsmz/tap/$(basename "$cask" .rb)"
             brew style --cask "$name"
             brew audit --cask --strict "$name"
+          done
+          for formula in Formula/*.rb; do
+            name="yshrsmz/tap/$(basename "$formula" .rb)"
+            brew style --formula "$name"
+            brew audit --formula --strict "$name"
           done
