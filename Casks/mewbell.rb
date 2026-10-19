@@ -1,6 +1,6 @@
 cask "mewbell" do
-  version "0.6.0"
-  sha256 "b119dbc3d98d384b9e7e4d1e06d311173a6b090a4273295e26d6747b3c916fe8"
+  version "0.7.0"
+  sha256 "a3fba0c391f062980bc45f26c8127b648eb10c7d8ebf0f290b2edcfc3ca35fcd"
 
   url "https://github.com/yshrsmz/mewbell/releases/download/v#{version}/Mewbell-#{version}.zip"
   name "Mewbell"
