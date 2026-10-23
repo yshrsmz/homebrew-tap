@@ -5,11 +5,11 @@ class Mewgit < Formula
 
   # on_macos / on_linux の中に url と sha256 は置けない（brew audit --strict が断る）
   if OS.mac?
-    url "https://github.com/yshrsmz/mewgit/releases/download/v0.1.1/mewgit-v0.1.1-aarch64-apple-darwin.tar.gz"
-    sha256 "aeaf12a9e51668798be916ebf351cdc78926dd903730d5ca463b3af9f123763f"
+    url "https://github.com/yshrsmz/mewgit/releases/download/v0.1.3/mewgit-v0.1.3-aarch64-apple-darwin.tar.gz"
+    sha256 "18cd0348c3c5d278927ea6c9e990e7eeb1afb48806e961e50faa0efcc7b3024a"
   else
-    url "https://github.com/yshrsmz/mewgit/releases/download/v0.1.1/mewgit-v0.1.1-aarch64-unknown-linux-gnu.tar.gz"
-    sha256 "8d8ae8f2af04e04c13855ee9808ccec06329b92cf60fa234d938997ad7308217"
+    url "https://github.com/yshrsmz/mewgit/releases/download/v0.1.3/mewgit-v0.1.3-aarch64-unknown-linux-gnu.tar.gz"
+    sha256 "e0e015afbf42e144a520d8404287d326f16b346e74d1e4d5b922c6257bbaa522"
   end
 
   depends_on arch: :arm64
